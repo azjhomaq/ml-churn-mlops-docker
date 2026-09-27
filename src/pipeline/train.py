@@ -16,11 +16,18 @@ warnings.filterwarnings('ignore')
 
 # ============================================================
 # CONFIGURACIÓN DE MLflow
+# Respeta MLFLOW_TRACKING_URI si viene del entorno (Docker la fija a
+# sqlite:////mlflow_data/mlflow.db); si no, usa esa misma ruta por defecto.
+# En GitHub Actions (sin Docker) se sobreescribe a una ruta relativa,
+# porque el runner no tiene permiso de escritura en la raíz "/".
 # ============================================================
-os.makedirs('/mlflow_data', exist_ok=True)
-DB_PATH = '/mlflow_data/mlflow.db'
-MLFLOW_TRACKING_URI = f'sqlite:///{DB_PATH}'
+MLFLOW_TRACKING_URI = os.getenv('MLFLOW_TRACKING_URI', 'sqlite:////mlflow_data/mlflow.db')
+DB_PATH = MLFLOW_TRACKING_URI.replace('sqlite:///', '', 1)
 print(f"🔍 MLflow URI: {MLFLOW_TRACKING_URI}")
+
+db_dir = os.path.dirname(DB_PATH)
+if db_dir:
+    os.makedirs(db_dir, exist_ok=True)
 
 # Eliminar base de datos corrupta si existe
 if os.path.exists(DB_PATH):

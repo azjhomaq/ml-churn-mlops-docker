@@ -24,6 +24,8 @@ jobs:
           pip install --no-cache-dir -r requirements-dev.txt
 
       - name: Entrenar modelo (necesario para que existan los artefactos que usa la API)
+        env:
+          MLFLOW_TRACKING_URI: sqlite:///mlflow_data/mlflow.db
         run: python src/pipeline/train.py
 
       - name: Ejecutar tests

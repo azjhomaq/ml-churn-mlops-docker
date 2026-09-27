@@ -1,7 +1,20 @@
 # Artefactos generados (se regeneran con train.py / docker-compose up train)
-mlflow_data/
+# El patrón "carpeta/*" + "!carpeta/.gitkeep" ignora el contenido generado
+# pero deja que git preserve la carpeta vacía (git no versiona carpetas
+# vacías por sí solas, por eso el .gitkeep).
+mlflow_data/*
+!mlflow_data/.gitkeep
 models/*.joblib
-monitoring/*.db
+monitoring/*
+!monitoring/.gitkeep
+reports/*
+!reports/.gitkeep
+
+# Airflow (se regeneran solos al levantar docker-compose-airflow.yml)
+logs/*
+!logs/.gitkeep
+plugins/*
+!plugins/.gitkeep
 
 # Python
 __pycache__/

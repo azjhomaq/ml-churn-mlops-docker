@@ -17,47 +17,73 @@ flowchart LR
     end
 
     subgraph Servicio
-        E --> F[FastAPI /predict /health /model-info /stats]
+        E --> F[FastAPI /predict /health /model-info /stats /reload-model]
         F --> G[(SQLite\npredictions.db)]
     end
 
+    subgraph Monitoreo y reentrenamiento
+        G -->|producción real| K[drift_detection.py\nEvidently AI]
+        A -->|referencia| K
+        K --> L{drift > 30%?}
+        L -->|sí, semanal o manual| B
+        F -.->|POST /reload-model| F
+    end
+
     subgraph Interfaces
-        H[Streamlit UI] -->|POST /predict| F
+        H[Streamlit UI: Predicción / Modelos / Drift / Estado] -->|POST /predict| F
+        H -->|REST API| M[Airflow]
         I[Swagger UI /docs] --> F
         J[MLflow UI :5000] --> C
+        M[Airflow :8080\nDAG semanal] --> K
+        M --> B
     end
 ```
 
-## Servicios (Docker Compose)
+## Servicios
+
+**Stack base** (`docker-compose.yml`):
 
 | Servicio    | Puerto | Descripción                                             |
 |-------------|--------|----------------------------------------------------------|
 | `train`     | —      | Entrena y compara modelos, registra el mejor en MLflow    |
 | `mlflow-ui` | 5000   | Interfaz de MLflow (experimentos, métricas, registry)      |
-| `api`       | 8000   | FastAPI con `/predict`, `/health`, `/model-info`, `/stats` |
-| `streamlit` | 8501   | Formulario web para ingresar parámetros y ver la predicción |
+| `api`       | 8000   | FastAPI con `/predict`, `/health`, `/model-info`, `/stats`, `/reload-model` |
+| `streamlit` | 8501   | Interfaz con pestañas: Predicción, Comparación de Modelos, Drift & Reentrenamiento, Estado del Sistema |
+
+**Stack de orquestación** (`docker-compose-airflow.yml`, opcional):
+
+| Servicio             | Puerto | Descripción                                    |
+|----------------------|--------|--------------------------------------------------|
+| `postgres`            | —      | Base de datos de metadatos de Airflow             |
+| `airflow-webserver`   | 8080   | UI de Airflow (usuario/clave: `airflow`/`airflow`) |
+| `airflow-scheduler`   | —      | Ejecuta el DAG `churn_retraining_pipeline`         |
+| `airflow-init`        | —      | Inicializa la base de datos y el usuario admin (corre una vez) |
 
 ## Uso rápido
 
 ```bash
-./run.sh train    # entrena y compara modelos, registra el mejor en MLflow
-./run.sh start     # levanta api, mlflow-ui y streamlit
-./run.sh test      # prueba /predict con un ejemplo
+./run.sh train          # entrena y compara modelos, registra el mejor en MLflow
+./run.sh start           # levanta api, mlflow-ui y streamlit (sin Airflow)
+./run.sh test            # prueba /predict con un ejemplo
+./run.sh drift           # corre la detección de drift una sola vez, sin Airflow
+./run.sh airflow-start   # levanta TODO, incluyendo Airflow, para el reentrenamiento programado
 ```
 
 - API (Swagger): http://localhost:8000/docs
 - MLflow UI: http://localhost:5000
 - Interfaz Streamlit: http://localhost:8501
+- Airflow UI: http://localhost:8080 (solo con `airflow-start`)
 
 ## Endpoints de la API
 
-| Método | Ruta          | Descripción                                             |
-|--------|---------------|-----------------------------------------------------------|
-| GET    | `/`           | Estado general                                            |
-| GET    | `/health`     | Health check                                              |
-| GET    | `/model-info` | Metadata del modelo (tipo, features esperadas)             |
-| POST   | `/predict`    | Predicción de churn dado un cliente                        |
-| GET    | `/stats`      | Monitoreo: total de predicciones, tasa de churn observada, últimas 10 |
+| Método | Ruta            | Descripción                                             |
+|--------|-----------------|-----------------------------------------------------------|
+| GET    | `/`             | Estado general                                            |
+| GET    | `/health`       | Health check                                              |
+| GET    | `/model-info`   | Metadata del modelo (tipo, features esperadas)             |
+| POST   | `/predict`      | Predicción de churn dado un cliente                        |
+| GET    | `/stats`        | Monitoreo: total de predicciones, tasa de churn observada, últimas 10 |
+| POST   | `/reload-model` | Recarga model/scaler/encoders desde disco sin reiniciar el contenedor (la usa Airflow tras reentrenar) |
 
 ## Comparación de modelos
 
@@ -98,25 +124,68 @@ python src/pipeline/train.py   # genera los artefactos que la API necesita
 pytest tests/ -v
 ```
 
+## Detección de drift y reentrenamiento automático
+
+`src/drift_detection.py` usa **Evidently AI** para comparar el dataset de
+entrenamiento (referencia) contra los datos de **producción reales**
+reconstruidos a partir de `monitoring/predictions.db` — es decir, las
+predicciones que la API fue registrando (no datos simulados, salvo que
+todavía haya menos de 30 predicciones reales, en cuyo caso simula un lote
+con corrimiento intencional solo para poder demostrar el flujo).
+
+El DAG de Airflow `churn_retraining_pipeline` (`dags/churn_retraining_dag.py`)
+corre **automáticamente cada semana** (`schedule_interval='@weekly'`):
+
+1. `check_data_availability` — confirma que el dataset existe
+2. `detect_drift` — corre `drift_detection.py`, guarda un reporte HTML en
+   `reports/` y las métricas en el experimento `drift_monitoring` de MLflow
+3. `decide_retrain` — si el % de features con drift supera 30%, sigue a
+   reentrenar; si no, salta directo a `end`
+4. `retrain_model` — corre `train.py` (compara los 3 modelos, registra el
+   mejor en el Model Registry)
+5. `reload_api_model` — le pide a la API, por HTTP (`POST /reload-model`),
+   que recargue los artefactos desde disco — sin reiniciar el contenedor
+   y sin que Airflow necesite tocar Docker directamente
+
+También puedes disparar este mismo DAG a demanda desde la pestaña
+**"Drift & Reentrenamiento"** de Streamlit, o correr solo la detección de
+drift sin Airflow con `./run.sh drift`.
+
+**Por qué una imagen propia de Airflow (`Dockerfile.airflow`):** la imagen
+oficial `apache/airflow` no trae pandas/scikit-learn/mlflow/evidently.
+Instalarlos a mano dentro del contenedor ya corriendo funciona para probar,
+pero no es reproducible si alguien vuelve a levantar el proyecto desde cero.
+`Dockerfile.airflow` + `requirements-airflow.txt` lo dejan reproducible con
+un solo `docker-compose build`.
+
 ## Cambios respecto a la versión anterior
 
 - Se eliminó la ambigüedad entre `docker-compose.yaml` y `docker-compose.yml`
   (usar solo este archivo).
 - Se corrigió el comando del servicio `train`, que apuntaba a `src/train.py`
   en vez de `src/pipeline/train.py`.
-- Se agregó el servicio `streamlit` con una interfaz de formulario.
+- Se agregó el servicio `streamlit` con una interfaz de varias pestañas.
 - Se agregó logging de predicciones y el endpoint `/stats`.
 - Se agregó comparación de modelos + registro en el Model Registry de MLflow.
 - Se agregaron tests automatizados y un pipeline de CI en GitHub Actions.
+- Se agregó detección de drift con Evidently AI usando datos de producción
+  reales (no simulados) y reentrenamiento automático programado con Airflow.
+- Se agregó `/reload-model` para que la API recargue el modelo sin reiniciar
+  el contenedor, evitando que Airflow necesite acceso al socket de Docker.
 
 ## Limitaciones conocidas
 
 - El registro en el Model Registry requiere un backend de base de datos
   (SQLite cumple); si migran a un `file store` de MLflow, el registry no
   funcionará.
-- No hay reentrenamiento automático programado (cron) ni detección formal
-  de *data drift*; el endpoint `/stats` da una foto básica de las
-  predicciones recientes, no un análisis estadístico de drift.
+- El stack de Airflow (Postgres + webserver + scheduler) es pesado; si la
+  máquina tiene poca RAM, usa `./run.sh start` (sin Airflow) para el día a
+  día y `./run.sh airflow-start` solo cuando quieras mostrar/probar el
+  reentrenamiento programado.
+- La detección de drift con datos reales necesita al menos 30 predicciones
+  registradas en `monitoring/predictions.db`; antes de eso usa un lote
+  simulado (claramente marcado en el log y en MLflow como
+  `used_real_production_data=False`).
 - Los tests de CI entrenan el modelo con el dataset real si está presente
   en el repo, o generan datos sintéticos si no — verificar que
   `data/Telco-Customer-Churn.csv` esté versionado o documentar cómo

@@ -1,0 +1,13 @@
+# Extiende la imagen oficial de Airflow agregando las dependencias que
+# necesitan nuestros DAGs (pandas, mlflow, evidently, scikit-learn) para
+# poder llamar a src/drift_detection.py y src/pipeline/train.py.
+#
+# Por qué esto y no instalar los paquetes a mano dentro del contenedor:
+# así queda reproducible con un solo "docker-compose build", sin pasos
+# manuales que se pierden si alguien vuelve a levantar el proyecto desde cero.
+FROM apache/airflow:2.8.1
+
+USER airflow
+
+COPY requirements-airflow.txt /requirements-airflow.txt
+RUN pip install --no-cache-dir -r /requirements-airflow.txt

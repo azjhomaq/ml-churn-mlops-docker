@@ -129,6 +129,18 @@ except Exception as e:
     model = None
 
 
+def reload_artifacts():
+    """Recarga model/scaler/encoders desde disco sin reiniciar el contenedor.
+    La llama el DAG de reentrenamiento (POST /reload-model) después de que
+    train.py deja artefactos nuevos en models/, para que la API los tome
+    de inmediato sin necesitar un restart manual."""
+    global model, scaler, encoders
+    model = joblib.load(MODEL_PATH)
+    scaler = joblib.load(SCALER_PATH)
+    encoders = joblib.load(ENCODER_PATH)
+    logger.info("🔄 Artefactos recargados desde disco")
+
+
 @app.get("/")
 async def root():
     return {"message": "Churn Prediction API", "status": "running", "model_loaded": model is not None}
@@ -147,6 +159,18 @@ async def model_info():
         "expected_features": FEATURE_COLUMNS,
         "num_features": len(FEATURE_COLUMNS)
     }
+
+
+@app.post("/reload-model")
+async def reload_model():
+    """Recarga los artefactos del modelo desde disco (sin reiniciar el contenedor).
+    Pensado para ser llamado por el DAG de Airflow después de un reentrenamiento."""
+    try:
+        reload_artifacts()
+        return {"status": "reloaded", "model_loaded": model is not None}
+    except Exception as e:
+        logger.error(f"❌ Error recargando modelo: {e}")
+        raise HTTPException(status_code=500, detail=f"No se pudo recargar el modelo: {str(e)}")
 
 
 @app.get("/stats")

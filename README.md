@@ -89,7 +89,7 @@ flowchart LR
 
 `train.py` entrena y compara 3 modelos sobre el mismo split de datos:
 
-- `RandomForestClassifier` (baseline original)
+- `RandomForestClassifier`
 - `LogisticRegression`
 - `GradientBoostingClassifier`
 
@@ -151,27 +151,17 @@ También puedes disparar este mismo DAG a demanda desde la pestaña
 **"Drift & Reentrenamiento"** de Streamlit, o correr solo la detección de
 drift sin Airflow con `./run.sh drift`.
 
-**Por qué una imagen propia de Airflow (`Dockerfile.airflow`):** la imagen
-oficial `apache/airflow` no trae pandas/scikit-learn/mlflow/evidently.
-Instalarlos a mano dentro del contenedor ya corriendo funciona para probar,
-pero no es reproducible si alguien vuelve a levantar el proyecto desde cero.
-`Dockerfile.airflow` + `requirements-airflow.txt` lo dejan reproducible con
-un solo `docker-compose build`.
+Se usa una imagen propia de Airflow (`Dockerfile.airflow`) porque la imagen
+oficial `apache/airflow` no trae pandas, scikit-learn, mlflow ni evidently.
+`Dockerfile.airflow` junto con `requirements-airflow.txt` dejan esas
+dependencias instaladas de forma reproducible con un solo
+`docker-compose build`, sin tener que instalarlas a mano dentro del
+contenedor cada vez que alguien levanta el proyecto desde cero.
 
-## Cambios respecto a la versión anterior
-
-- Se eliminó la ambigüedad entre `docker-compose.yaml` y `docker-compose.yml`
-  (usar solo este archivo).
-- Se corrigió el comando del servicio `train`, que apuntaba a `src/train.py`
-  en vez de `src/pipeline/train.py`.
-- Se agregó el servicio `streamlit` con una interfaz de varias pestañas.
-- Se agregó logging de predicciones y el endpoint `/stats`.
-- Se agregó comparación de modelos + registro en el Model Registry de MLflow.
-- Se agregaron tests automatizados y un pipeline de CI en GitHub Actions.
-- Se agregó detección de drift con Evidently AI usando datos de producción
-  reales (no simulados) y reentrenamiento automático programado con Airflow.
-- Se agregó `/reload-model` para que la API recargue el modelo sin reiniciar
-  el contenedor, evitando que Airflow necesite acceso al socket de Docker.
+La API expone `/reload-model` para recargar el modelo, el scaler y los
+encoders desde disco sin reiniciar el contenedor. Esto es lo que usa
+Airflow al final del pipeline de reentrenamiento, así no necesita acceso al
+socket de Docker para reiniciar nada.
 
 ## Limitaciones conocidas
 

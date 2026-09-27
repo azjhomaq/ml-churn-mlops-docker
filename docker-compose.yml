@@ -1,0 +1,59 @@
+services:
+  train:
+    build:
+      context: .
+      dockerfile: Dockerfile.train
+    volumes:
+      - ./data:/app/data
+      - ./models:/app/models
+      - ./mlflow_data:/mlflow_data
+    environment:
+      - MLFLOW_TRACKING_URI=sqlite:////mlflow_data/mlflow.db
+    # OJO: antes decía "python src/train.py" pero el archivo vive en src/pipeline/train.py
+    command: python src/pipeline/train.py
+
+  mlflow-ui:
+    image: python:3.10-slim
+    working_dir: /app
+    volumes:
+      - ./mlflow_data:/mlflow_data
+      - ./models:/app/models
+    ports:
+      - "5000:5000"
+    environment:
+      - MLFLOW_TRACKING_URI=sqlite:////mlflow_data/mlflow.db
+    command: >
+      sh -c "pip install --no-cache-dir mlflow>=2.0.0 &&
+             mlflow ui --backend-store-uri sqlite:////mlflow_data/mlflow.db --host 0.0.0.0 --port 5000"
+    depends_on:
+      - train
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - ./models:/app/models
+      - ./monitoring:/app/monitoring
+    ports:
+      - "8000:8000"
+    environment:
+      - MODEL_PATH=/app/models/model.joblib
+      - SCALER_PATH=/app/models/scaler.joblib
+      - ENCODER_PATH=/app/models/label_encoders.joblib
+      - MONITORING_DB_PATH=/app/monitoring/predictions.db
+    depends_on:
+      - train
+    restart: unless-stopped
+
+  streamlit:
+    build:
+      context: .
+      dockerfile: Dockerfile.streamlit
+    ports:
+      - "8501:8501"
+    environment:
+      - API_URL=http://api:8000
+    depends_on:
+      - api
+    restart: unless-stopped

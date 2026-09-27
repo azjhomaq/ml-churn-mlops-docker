@@ -1,0 +1,31 @@
+FROM python:3.9-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    MLFLOW_TRACKING_URI=sqlite:////mlflow_data/mlflow.db
+
+WORKDIR /app
+
+# Instalar dependencias del sistema
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    gcc g++ build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+# Instalar setuptools primero
+RUN pip install --no-cache-dir --upgrade pip setuptools==65.5.0 wheel
+
+# Copiar requirements e instalar
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Crear directorios necesarios
+RUN mkdir -p /app/data /app/models /mlflow_data
+
+# Copiar código fuente
+COPY src/ ./src/
+
+# Verificar instalación
+RUN python -c "import pkg_resources; print('✅ pkg_resources OK')"
+
+CMD ["python", "src/train.py"]

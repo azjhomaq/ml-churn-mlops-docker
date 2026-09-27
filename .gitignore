@@ -1,0 +1,14 @@
+# Artefactos generados (se regeneran con train.py / docker-compose up train)
+mlflow_data/
+models/*.joblib
+monitoring/*.db
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+
+# Entornos
+.venv/
+venv/

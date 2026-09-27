@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Instalar dependencias
+        run: |
+          pip install --no-cache-dir -r requirements.txt
+          pip install --no-cache-dir -r requirements-dev.txt
+
+      - name: Entrenar modelo (necesario para que existan los artefactos que usa la API)
+        run: python src/pipeline/train.py
+
+      - name: Ejecutar tests
+        run: pytest tests/ -v
+
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build imagen API
+        run: docker build -t churn-api:ci -f Dockerfile .
+
+      - name: Build imagen train
+        run: docker build -t churn-train:ci -f Dockerfile.train .
+
+      - name: Build imagen Streamlit
+        run: docker build -t churn-streamlit:ci -f Dockerfile.streamlit .
